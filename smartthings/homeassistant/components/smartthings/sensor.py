@@ -560,37 +560,44 @@ async def async_setup_entry(
     broker = hass.data[DOMAIN][DATA_BROKERS][config_entry.entry_id]
     entities: list[SensorEntity] = []
     for device in broker.devices.values():
-        for capability in broker.get_assigned(device.device_id, "sensor"):
-            if capability == Capability.three_axis:
-                entities.extend(
-                    [
-                        SmartThingsThreeAxisSensor(device, index)
-                        for index in range(len(THREE_AXIS_NAMES))
-                    ]
-                )
-            elif capability == Capability.power_consumption_report:
-                entities.extend(
-                    [
-                        SmartThingsPowerConsumptionSensor(device, report_name)
-                        for report_name in POWER_CONSUMPTION_REPORT_NAMES
-                    ]
-                )
-            else:
-                maps = CAPABILITY_TO_SENSORS[capability]
-                entities.extend(
-                    [
-                        SmartThingsSensor(
-                            device,
-                            m.attribute,
-                            m.name,
-                            m.default_unit,
-                            m.device_class,
-                            m.state_class,
-                            m.entity_category,
-                        )
-                        for m in maps
-                    ]
-                )
+        device_capabilities_for_sensor = broker.get_assigned(device.device_id, "sensor")
+        for component in device.components:
+            for capability in device.components[component]:
+                if capability not in device_capabilities_for_sensor:
+                    continue
+                if capability == Capability.three_axis:
+                    entities.extend(
+                        [
+                            SmartThingsThreeAxisSensor(device, component, index)
+                            for index in range(len(THREE_AXIS_NAMES))
+                        ]
+                    )
+                elif capability == Capability.power_consumption_report:
+                    entities.extend(
+                        [
+                            SmartThingsPowerConsumptionSensor(
+                                device, component, report_name
+                            )
+                            for report_name in POWER_CONSUMPTION_REPORT_NAMES
+                        ]
+                    )
+                else:
+                    maps = CAPABILITY_TO_SENSORS[capability]
+                    entities.extend(
+                        [
+                            SmartThingsSensor(
+                                device,
+                                component,
+                                m.attribute,
+                                m.name,
+                                m.default_unit,
+                                m.device_class,
+                                m.state_class,
+                                m.entity_category,
+                            )
+                            for m in maps
+                        ]
+                    )
 
         if broker.any_assigned(device.device_id, "switch"):
             for capability in (Capability.energy_meter, Capability.power_meter):
@@ -599,6 +606,7 @@ async def async_setup_entry(
                     [
                         SmartThingsSensor(
                             device,
+                            "main",
                             m.attribute,
                             m.name,
                             m.default_unit,
@@ -626,6 +634,7 @@ class SmartThingsSensor(SmartThingsEntity, SensorEntity):
     def __init__(
         self,
         device: DeviceEntity,
+        component: str,
         attribute: str,
         name: str,
         default_unit: str,
@@ -635,9 +644,14 @@ class SmartThingsSensor(SmartThingsEntity, SensorEntity):
     ) -> None:
         """Init the class."""
         super().__init__(device)
+        self._component = component
         self._attribute = attribute
-        self._attr_name = f"{device.label} {name}"
-        self._attr_unique_id = f"{device.device_id}.{attribute}"
+        if self._component == "main":
+            self._attr_name = f"{device.label} {name}"
+            self._attr_unique_id = f"{device.device_id}.{attribute}"
+        else:
+            self._attr_name = f"{device.label} {component} {name}"
+            self._attr_unique_id = f"{device.device_id}.{component}.{attribute}"
         self._attr_device_class = device_class
         self._default_unit = default_unit
         self._attr_state_class = state_class
@@ -646,7 +660,14 @@ class SmartThingsSensor(SmartThingsEntity, SensorEntity):
     @property
     def native_value(self):
         """Return the state of the sensor."""
-        value = self._device.status.attributes[self._attribute].value
+        if self._component == "main":
+            value = self._device.status.attributes[self._attribute].value
+        else:
+            value = (
+                self._device.status.components[self._component]
+                .attributes[self._attribute]
+                .value
+            )
 
         if self.device_class != SensorDeviceClass.TIMESTAMP:
             return value
@@ -686,13 +707,19 @@ class SmartThingsPowerConsumptionSensor(SmartThingsEntity, SensorEntity):
     def __init__(
         self,
         device: DeviceEntity,
+        component: str,
         report_name: str,
     ) -> None:
         """Init the class."""
         super().__init__(device)
+        self._component = component
         self.report_name = report_name
-        self._attr_name = f"{device.label} {report_name}"
-        self._attr_unique_id = f"{device.device_id}.{report_name}_meter"
+        if component == "main":
+            self._attr_name = f"{device.label} {report_name}"
+            self._attr_unique_id = f"{device.device_id}.{report_name}_meter"
+        else:
+            self._attr_name = f"{device.label} {component} {report_name}"
+            self._attr_unique_id = f"{device.device_id}.{component}.{report_name}_meter"
         if self.report_name == "power":
             self._attr_state_class = SensorStateClass.MEASUREMENT
             self._attr_device_class = SensorDeviceClass.POWER
@@ -705,7 +732,14 @@ class SmartThingsPowerConsumptionSensor(SmartThingsEntity, SensorEntity):
     @property
     def native_value(self):
         """Return the state of the sensor."""
-        value = self._device.status.attributes[Attribute.power_consumption].value
+        if self._component == "main":
+            value = self._device.status.attributes[Attribute.power_consumption].value
+        else:
+            value = (
+                self._device.status.components[self._component]
+                .attributes[Attribute.power_consumption]
+                .value
+            )
         if value is None or value.get(self.report_name) is None:
             return None
         if self.report_name == "power":
@@ -722,7 +756,12 @@ class SmartThingsPowerConsumptionSensor(SmartThingsEntity, SensorEntity):
             ]
             state_attributes = {}
             for attribute in attributes:
-                value = getattr(self._device.status, attribute)
+                if self._component == "main":
+                    value = getattr(self._device.status, attribute)
+                else:
+                    value = getattr(
+                        self._device.status.components[self._component], attribute
+                    )
                 if value is not None:
                     state_attributes[attribute] = value
             return state_attributes

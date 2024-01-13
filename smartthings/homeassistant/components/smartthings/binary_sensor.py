@@ -53,9 +53,15 @@ async def async_setup_entry(
     broker = hass.data[DOMAIN][DATA_BROKERS][config_entry.entry_id]
     sensors = []
     for device in broker.devices.values():
-        for capability in broker.get_assigned(device.device_id, "binary_sensor"):
-            attrib = CAPABILITY_TO_ATTRIB[capability]
-            sensors.append(SmartThingsBinarySensor(device, attrib))
+        device_capabilities_for_binary_sensor = broker.get_assigned(
+            device.device_id, "binary_sensor"
+        )
+        for component in device.components:
+            for capability in device.components[component]:
+                if capability not in device_capabilities_for_binary_sensor:
+                    continue
+                attrib = CAPABILITY_TO_ATTRIB[capability]
+                sensors.append(SmartThingsBinarySensor(device, component, attrib))
     async_add_entities(sensors)
 
 
@@ -69,16 +75,23 @@ def get_capabilities(capabilities: Sequence[str]) -> Sequence[str] | None:
 class SmartThingsBinarySensor(SmartThingsEntity, BinarySensorEntity):
     """Define a SmartThings Binary Sensor."""
 
-    def __init__(self, device, attribute):
+    def __init__(self, device, component, attribute):
         """Init the class."""
         super().__init__(device)
+        self._component = component
         self._attribute = attribute
-        self._attr_name = f"{device.label} {attribute}"
-        self._attr_unique_id = f"{device.device_id}.{attribute}"
+        if self._component == "main":
+            self._attr_name = f"{device.label} {attribute}"
+            self._attr_unique_id = f"{device.device_id}.{attribute}"
+        else:
+            self._attr_name = f"{device.label} {component} {attribute}"
+            self._attr_unique_id = f"{device.device_id}.{component}.{attribute}"
         self._attr_device_class = ATTRIB_TO_CLASS[attribute]
         self._attr_entity_category = ATTRIB_TO_ENTTIY_CATEGORY.get(attribute)
 
     @property
     def is_on(self):
         """Return true if the binary sensor is on."""
-        return self._device.status.is_on(self._attribute)
+        if self._component == "main":
+            return self._device.status.is_on(self._attribute)
+        return self._device.status.components[self._component].is_on(self._attribute)
