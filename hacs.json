@@ -1,0 +1,5 @@
+{
+  "name": "SmartThings",
+  "render_readme": true,
+  "homeassistant": "2023.3.0"
+}
